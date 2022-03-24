@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	CompactThreshold    uint64 = 1 << 12
-	LoggerSizeThreshold uint64 = 1 << 10
+	CompactThreshold    uint64 = 1 << 16
+	LoggerSizeThreshold uint64 = 1 << 7
 	CRCSize             uint64 = 8
 	suffix              string = ".log"
+	prefix              string = "./data/"
 )
 
 type Logger struct {
@@ -19,12 +20,17 @@ type Logger struct {
 	FileSize uint64
 }
 
-func newLogger() *Logger {
-	return &Logger{
-		LogName:  "",
+func newLogger(fname string) *Logger {
+	newlogger := &Logger{
+		LogName:  fname,
 		Fd:       nil,
 		FileSize: 0,
 	}
+	err := newlogger.Open(fname)
+	if err != nil {
+		log.Fatal("Open new .log failed.", err)
+	}
+	return newlogger
 }
 
 func (logger *Logger) Open(logname string) (err error) {

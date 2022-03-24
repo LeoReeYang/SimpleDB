@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -15,10 +14,10 @@ import (
 func (this *Bitcask) Set(key, value *string) (err error) {
 
 	record := newRecord(GetNewTimeStamp(), uint64(len(*key)), uint64(len(*value)), NewValue, *key, *value)
-	this.CheckUncompacted(key)
 
 	this.RWmutex.Lock()
-	err = this.LoggerWrite(key, record)
+	this.CheckUncompacted(key)
+	err = this.LoggerWrite(this.WorkLogger, key, record)
 	this.RWmutex.Unlock()
 
 	return err
@@ -37,27 +36,9 @@ func (this *Bitcask) Remove(key *string) {
 
 	this.RWmutex.Lock()
 	this.CheckUncompacted(key)
-	this.LoggerWrite(key, record)
+	this.LoggerWrite(this.WorkLogger, key, record)
 
 	this.RWmutex.Unlock()
-}
-
-func (this *Bitcask) fileInit(file fs.DirEntry) (cont []byte, contSize, pos int) {
-
-	if err := this.WorkLogger.Open("./data/" + file.Name()); err != nil {
-		log.Fatalln("recovery open log file failed.")
-	}
-
-	content, err := ioutil.ReadAll(this.WorkLogger.Fd)
-
-	if err != nil {
-		log.Fatalln("Recovery read into memory failed.", err)
-	}
-
-	contentSize := len(content)
-	this.WorkLogger.FileSize = uint64(contentSize)
-
-	return content, contentSize, 0
 }
 
 func (this *Bitcask) Recovery() {
@@ -74,27 +55,20 @@ func (this *Bitcask) Recovery() {
 
 		r := bytes.NewReader(content)
 
-		for pos < contentSize {
-
-			this.readRecordHead(r, &pos, &recordHead)
-
-			key := make([]byte, recordHead.KeySize)
-			value := make([]byte, recordHead.ValueSize)
-
-			this.readKey(r, &pos, &recordHead, key)
-
-			if recordHead.ValueType == NewValue {
-				this.newValueHandle(r, &pos, &recordHead, value, &checksum, key, kv)
-			} else {
-				this.removeHandle(r, &recordHead, key, value, &checksum, kv)
-			}
-		}
+		this.traverseFile(r, &recordHead, &pos, contentSize, &checksum, kv)
 
 		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 
 	if uncompacted >= CompactThreshold {
-		this.Compact()
+		fn := this.WorkLogger.LogName
+		this.Compact(fn)
+	}
+
+	if len(files) != 0 {
+		newLogId := GetLogId(this.WorkLogger.LogName) + 1
+		newLogFileName := prefix + strconv.Itoa(int(newLogId)) + suffix
+		this.WorkLogger.Open(newLogFileName)
 	}
 }
 
@@ -164,7 +138,7 @@ func (this *Bitcask) removeHandle(r *bytes.Reader, recordHead *RecordHead, key, 
 	return err
 }
 
-func (this *Bitcask) Compact() {
+func (this *Bitcask) Compact(fn string) {
 
 	this.CompactMutex.Lock()
 	defer this.CompactMutex.Unlock()
@@ -172,24 +146,28 @@ func (this *Bitcask) Compact() {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
+	new_logs := make(map[string]*Logger)
+	new_index := make(map[string]ValueIndex)
+	temp_logger := newLogger(prefix + "10000.log")
+
 	go func(logs map[string]*Logger, indexNow map[string]ValueIndex) {
 
-		new_logs := make(map[string]*Logger)
-		new_index := make(map[string]ValueIndex)
+		//traverse the logs and index
+		this.RWmutex.RLock()
+		for fn, v := range logs {
+			new_logs[fn] = v
+		}
+		for key, val := range indexNow {
+			new_index[key] = val
+		}
+		this.RWmutex.RUnlock()
 
 		for key, index := range indexNow {
 
 			buf := make([]byte, index.ValueLength)
-			err := logs[index.LogName].Read(&index, buf)
 
-			if err != nil {
+			if err := logs[index.LogName].Read(&index, buf); err != nil {
 				return
-			}
-
-			temp_logger := newLogger()
-
-			if err := temp_logger.Open("10000.log"); err != nil {
-				log.Fatalln("new log file open failed.")
 			}
 
 			record := newRecord(GetNewTimeStamp(), uint64(len(key)), index.ValueLength, NewValue, key, string(buf))
@@ -202,67 +180,27 @@ func (this *Bitcask) Compact() {
 
 				switchLogger(temp_logger, new_logs)
 
-				if temp_logger.FileSize > LoggerSizeThreshold {
-					new_logs[temp_logger.LogName] = temp_logger
-
-					newLogId := GetLogId(temp_logger.LogName) + 1
-					newLogFileName := strconv.Itoa(int(newLogId)) + suffix //get "id.log"
-
-					temp_logger.Open(newLogFileName)
-				}
-
 			} else {
 				log.Fatalln("new log file write failed.")
 			}
 		}
+
 		//Update the new logs and index
-		for key, vindex := range new_index {
-			this.Index[key] = vindex
-		}
-		for logname, logger := range new_logs {
-			this.Loggers[logname] = logger
-		}
+		func() {
+			this.RWmutex.Lock()
+			for key, vindex := range new_index {
+				this.Index[key] = vindex
+			}
+			for logname, logger := range new_logs {
+				this.Loggers[logname] = logger
+			}
+			this.RWmutex.Unlock()
+		}()
+
 		wg.Done()
 	}(this.Loggers, this.Index)
 
 	wg.Wait()
-}
-
-func (this *Bitcask) CheckUncompacted(key *string) {
-	if _, ok := this.Index[*key]; ok {
-		if uncompacted += this.GetRecordSize(key); uncompacted >= CompactThreshold {
-			uncompacted = 0
-			this.Compact()
-		}
-	}
-}
-
-func (this *Bitcask) UpdataIndex(key *string, valueOffset uint64, valueSize uint64) {
-	tempIndex := newIndex(this.WorkLogger.LogName, valueOffset, valueSize)
-	this.Index[*key] = *tempIndex
-}
-
-func (this *Bitcask) switchLogger() {
-	if this.WorkLogger.FileSize > LoggerSizeThreshold {
-		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
-
-		newLogId := GetLogId(this.WorkLogger.LogName) + 1
-		newLogFileName := strconv.Itoa(int(newLogId)) + suffix
-
-		this.WorkLogger.Open(newLogFileName)
-	}
-}
-
-func switchLogger(temp_logger *Logger, new_logs map[string]*Logger) {
-
-	if temp_logger.FileSize > LoggerSizeThreshold {
-		new_logs[temp_logger.LogName] = temp_logger
-
-		newLogId := GetLogId(temp_logger.LogName) + 1
-		newLogFileName := strconv.Itoa(int(newLogId)) + suffix //get "id.log"
-
-		temp_logger.Open(newLogFileName)
-	}
 }
 
 func (this *Bitcask) LoggerRead(key *string, rawbuffer []byte) {
@@ -276,7 +214,7 @@ func (this *Bitcask) LoggerRead(key *string, rawbuffer []byte) {
 	}
 }
 
-func (this *Bitcask) LoggerWrite(key *string, record *Record) (err error) {
+func (this *Bitcask) LoggerWrite(logger *Logger, key *string, record *Record) (err error) {
 
 	if offset, err := this.WorkLogger.Write(record); err == nil {
 		this.UpdataIndex(key, offset, uint64(record.ValueSize))
@@ -288,30 +226,27 @@ func (this *Bitcask) LoggerWrite(key *string, record *Record) (err error) {
 
 func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry) {
 
-	uncompacted = 0
-
 	// testpath, err := os.MkdirTemp("", "data")
-	// if errs := os.Mkdir("./data", fs.FileMode(os.O_CREATE)); errs != nil {
+	// if errs := os.Mkdir("./data"); errs != nil {
 	// 	log.Fatal(errs)
 	// }
 	// testpath := "./data"
 
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	uncompacted = 0
 
 	files, err := os.ReadDir("./data")
-
-	testpath := "./data/0.log"
-
 	if err != nil {
 		log.Fatalln(err)
-		// return files
+		return
 	}
 
+	// testpath := "./data/0.log"
+
+	path := "0.log"
+
 	if len(files) == 0 {
-		this.WorkLogger.Open(testpath)
-		this.Loggers[testpath] = this.WorkLogger
+		this.WorkLogger.Open(prefix + path)
+		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 	return files
 }
@@ -320,8 +255,4 @@ func GetNewTimeStamp() uint64 {
 	temp := TimeStampCount
 	TimeStampCount++
 	return temp
-}
-
-func Atoi(b []byte) {
-	panic("unimplemented")
 }

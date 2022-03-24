@@ -30,9 +30,13 @@ type Bitcask struct {
 
 func newBitcask() *Bitcask {
 	bitcask := &Bitcask{
-		Index:      make(map[string]ValueIndex, 0),
-		Loggers:    make(map[string]*Logger, 0),
-		WorkLogger: newLogger(),
+		Index:   make(map[string]ValueIndex, 0),
+		Loggers: make(map[string]*Logger, 0),
+		WorkLogger: &Logger{
+			LogName:  "",
+			Fd:       nil,
+			FileSize: 0,
+		},
 	}
 	bitcask.Recovery()
 
@@ -71,8 +75,6 @@ func (r *Record) BuildBuffer() []byte {
 	buffer = append(buffer, r.Value...)
 
 	Append(&buffer, uint64(GetCheckSum(buffer)))
-
-	// fmt.Printf("buffer []byte :%v\n", buffer)
 
 	return buffer
 }

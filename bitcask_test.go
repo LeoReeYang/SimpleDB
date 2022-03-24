@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -48,7 +49,7 @@ func TestLoggerWrite(t *testing.T) {
 	bitcask := newBitcask()
 	record := newRecord(GetNewTimeStamp(), 1, uint64(len(value)), NewValue, key, value)
 
-	err := bitcask.LoggerWrite(&key, record)
+	err := bitcask.LoggerWrite(bitcask.WorkLogger, &key, record)
 
 	fmt.Println("\n", bitcask.WorkLogger.LogName)
 	fmt.Println(record)
@@ -85,8 +86,9 @@ func TestRecovery(t *testing.T) {
 	// }
 	// defer os.RemoveAll("./data1")
 
-	// key1 := "0"
-	// key2 := "1"
+	os.Mkdir("./data", 0755)
+	defer os.RemoveAll("./data")
+
 	value1 := "cy is god!!"
 	value2 := "cy is god.."
 
@@ -94,25 +96,48 @@ func TestRecovery(t *testing.T) {
 
 	buf := make([]byte, len(value1))
 
-	for i := 0; i < 10; i++ {
-		key := strconv.Itoa(i)
-		fmt.Println(key)
+	wg := sync.WaitGroup{}
 
-		if (i % 2) == 1 {
-			fmt.Println(i % 2)
-			bitcask.Set(&key, &value1)
-		} else {
-			fmt.Println(i % 2)
-			bitcask.Set(&key, &value2)
-		}
+	var value = ""
 
+	for i := 0; i < 5; i++ {
+		wg.Add(2)
+
+		go func() {
+			for i := 0; i < 5; i++ {
+				key := strconv.Itoa(i)
+
+				if (i % 2) == 1 {
+					value = value1
+				} else {
+					value = value2
+				}
+
+				bitcask.Set(&key, &value)
+				fmt.Printf("key: %v write into value: %v  .\n", key, value)
+			}
+			wg.Done()
+		}()
+
+		go func() {
+			// time.Sleep(time.Second)
+
+			for j := 0; j < 5; j++ {
+				key := strconv.Itoa(j)
+				bitcask.Get(&key, buf)
+
+				fmt.Println(key, string(buf))
+			}
+			wg.Done()
+		}()
 	}
+	wg.Wait()
 
-	for i := 0; i < 10; i++ {
-		key := strconv.Itoa(i)
+	for j := 0; j < 5; j++ {
+		key := strconv.Itoa(j)
 		bitcask.Get(&key, buf)
-		fmt.Println(string(buf))
+
+		fmt.Println(key, string(buf))
 	}
-	os.Remove("./data/0.log")
 
 }
