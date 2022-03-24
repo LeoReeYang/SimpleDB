@@ -28,12 +28,32 @@ type Bitcask struct {
 	RWmutex      sync.RWMutex
 }
 
+func newBitcask() *Bitcask {
+	bitcask := &Bitcask{
+		Index:      make(map[string]ValueIndex, 0),
+		Loggers:    make(map[string]*Logger, 0),
+		WorkLogger: newLogger(),
+	}
+	bitcask.Recovery()
+
+	return bitcask
+}
+
 type Record struct {
 	TimeStamp, KeySize, ValueSize uint64
 	ValueType                     ValueType
 	Key                           []byte
 	Value                         []byte
 	CRC                           uint64
+}
+
+type RecordHead struct {
+	TimeStamp, KeySize, ValueSize uint64
+	ValueType                     ValueType
+}
+
+func newRecordHead() RecordHead {
+	return RecordHead{}
 }
 
 func (r *Record) BuildBuffer() []byte {
@@ -52,20 +72,25 @@ func (r *Record) BuildBuffer() []byte {
 
 	Append(&buffer, uint64(GetCheckSum(buffer)))
 
+	// fmt.Printf("buffer []byte :%v\n", buffer)
+
 	return buffer
 }
 
 func newRecord(tstmp, keysize, valuesize uint64, valueTp ValueType, key, value string) *Record {
-	return &Record{
+	record := &Record{
 		TimeStamp: tstmp,
 		KeySize:   keysize,
 		ValueSize: valuesize,
+		ValueType: valueTp,
 		Key:       []byte(key),
 		Value:     []byte(value),
 	}
+
+	return record
 }
 
-func Append[T constraints.Integer](buf *[]byte, data T) {
+func Append[T constraints.Unsigned](buf *[]byte, data T) {
 	size := int(unsafe.Sizeof(data))
 	for i := 0; i < size; i++ {
 		*buf = append(*buf, byte(data>>(i*8)))

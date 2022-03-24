@@ -3,6 +3,7 @@ package SimpleDB
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io/fs"
 	"io/ioutil"
 	"log"
@@ -11,14 +12,16 @@ import (
 	"sync"
 )
 
-func (this *Bitcask) Set(key, value *string) {
+func (this *Bitcask) Set(key, value *string) (err error) {
 
 	record := newRecord(GetNewTimeStamp(), uint64(len(*key)), uint64(len(*value)), NewValue, *key, *value)
 	this.CheckUncompacted(key)
 
 	this.RWmutex.Lock()
-	this.LoggerWrite(key, record)
+	err = this.LoggerWrite(key, record)
 	this.RWmutex.Unlock()
+
+	return err
 }
 
 func (this *Bitcask) Get(key *string, rawbuffer []byte) {
@@ -39,98 +42,55 @@ func (this *Bitcask) Remove(key *string) {
 	this.RWmutex.Unlock()
 }
 
-func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry, err error) {
-	uncompacted = 0
-	this.WorkLogger.Open("0.log")
-	this.Loggers["0.log"] = this.WorkLogger
+func (this *Bitcask) fileInit(file fs.DirEntry) (cont []byte, contSize, pos int) {
 
-	files, err := os.ReadDir("./data")
-	if err != nil {
-		log.Fatalln(err)
-		return files, err
+	if err := this.WorkLogger.Open("./data/" + file.Name()); err != nil {
+		log.Fatalln("recovery open log file failed.")
 	}
 
-	return files, nil
+	content, err := ioutil.ReadAll(this.WorkLogger.Fd)
+
+	if err != nil {
+		log.Fatalln("Recovery read into memory failed.", err)
+	}
+
+	contentSize := len(content)
+	this.WorkLogger.FileSize = uint64(contentSize)
+
+	return content, contentSize, 0
 }
 
 func (this *Bitcask) Recovery() {
 
+	var checksum uint64
 	kv := make(map[string]string)
+	recordHead := newRecordHead()
 
-	files, err := this.RecoveryInit()
-	if err != nil {
-		log.Fatalln("Open 0.log failed,Check /data dir.")
-		return
-	}
+	files := this.RecoveryInit()
 
 	for _, file := range files {
-		pos := 0
-		err := this.WorkLogger.Open(file.Name())
-		if err != nil {
-			log.Fatalln("recovery open log file failed.")
-		}
-		content, err := ioutil.ReadAll(this.WorkLogger.Fd)
-		if err != nil {
-			log.Fatalln("Recovery read into memory failed.", err)
-		}
 
-		contentSize := len(content)
+		content, contentSize, pos := this.fileInit(file)
 
 		r := bytes.NewReader(content)
 
-		var RecordHead struct {
-			TimeStamp, KeySize, ValueSize uint64
-			ValueType                     ValueType
-		}
+		for pos < contentSize {
 
-		for pos != contentSize {
-			if err := binary.Read(r, binary.LittleEndian, &RecordHead); err != nil {
-				log.Fatalln("read head failed.", err)
-			}
-			pos += InfoHeadSize
+			this.readRecordHead(r, &pos, &recordHead)
 
-			key := make([]byte, RecordHead.KeySize)
-			value := make([]byte, RecordHead.ValueSize)
-			var chechsum uint64
+			key := make([]byte, recordHead.KeySize)
+			value := make([]byte, recordHead.ValueSize)
 
-			if err := binary.Read(r, binary.LittleEndian, &key); err != nil {
-				log.Fatalln("read key failed.", err)
-			}
-			pos += int(RecordHead.KeySize)
+			this.readKey(r, &pos, &recordHead, key)
 
-			if RecordHead.ValueType == NewValue {
-				offset := pos
-				if err := binary.Read(r, binary.LittleEndian, &value); err != nil {
-					log.Fatalln("read key failed.", err)
-				}
-				if err := binary.Read(r, binary.LittleEndian, &chechsum); err != nil {
-					log.Fatalln("read key failed.", err)
-				}
-
-				pos += InfoHeadSize + int(RecordHead.KeySize) + int(RecordHead.ValueSize) + int(CRCSize)
-
-				if _, ok := this.Index[string(key)]; ok {
-					uncompacted += uint64(HeaderSize) + RecordHead.KeySize + this.Index[string(key)].ValueLength
-				}
-
-				this.Index[string(key)] = *newIndex(this.WorkLogger.LogName, uint64(offset), RecordHead.ValueSize)
-				kv[string(key)] = string(value)
-
+			if recordHead.ValueType == NewValue {
+				this.newValueHandle(r, &pos, &recordHead, value, &checksum, key, kv)
 			} else {
-				uncompacted += uint64(InfoHeadSize) + RecordHead.KeySize + CRCSize
-
-				delete(this.Index, string(key))
-				delete(kv, string(key))
-
-				if err := binary.Read(r, binary.LittleEndian, &value); err != nil {
-					log.Fatalln("read key failed.", err)
-				}
-				if err := binary.Read(r, binary.LittleEndian, &chechsum); err != nil {
-					log.Fatalln("read key failed.", err)
-				}
+				this.removeHandle(r, &recordHead, key, value, &checksum, kv)
 			}
 		}
 
+		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 
 	if uncompacted >= CompactThreshold {
@@ -138,7 +98,74 @@ func (this *Bitcask) Recovery() {
 	}
 }
 
+func (this *Bitcask) readLeft(r *bytes.Reader, pos *int, recordHead *RecordHead, value []byte, checksum *uint64) (offset uint64) {
+	offsets := *pos
+
+	if err := binary.Read(r, binary.LittleEndian, &value); err != nil {
+		log.Fatalln("recovery read value failed.", err)
+	}
+	if err := binary.Read(r, binary.LittleEndian, checksum); err != nil {
+		log.Fatalln("recovery read checksum failed.", err)
+	}
+	*pos += int(recordHead.ValueSize) + int(CRCSize)
+
+	return uint64(offsets)
+}
+
+func (this *Bitcask) readKey(r *bytes.Reader, pos *int, recordHead *RecordHead, key []byte) (err error) {
+	if err := binary.Read(r, binary.LittleEndian, key); err != nil {
+		log.Fatalln("read key failed.", err)
+	}
+	*pos += int(recordHead.KeySize)
+
+	return err
+}
+
+func (this *Bitcask) readRecordHead(r *bytes.Reader, pos *int, recordHead *RecordHead) (err error) {
+	if err := binary.Read(r, binary.LittleEndian, recordHead); err != nil {
+		log.Fatalln("read head failed.", err)
+	}
+	*pos += InfoHeadSize
+
+	return err
+}
+
+func (this *Bitcask) newValueHandle(r *bytes.Reader, pos *int, recordHead *RecordHead, value []byte, checksum *uint64, key []byte, kv map[string]string) (err error) {
+	offset := this.readLeft(r, pos, recordHead, value, checksum)
+
+	if _, ok := this.Index[string(key)]; ok {
+		uncompacted += uint64(HeaderSize) + recordHead.KeySize + this.Index[string(key)].ValueLength
+	}
+
+	// this.Index[string(key)] = *newIndex(this.WorkLogger.LogName, uint64(offset), recordHead.ValueSize)
+
+	key_str := string(key)
+
+	this.UpdataIndex(&key_str, uint64(offset), recordHead.ValueSize)
+
+	kv[string(key)] = string(value)
+
+	return err
+}
+
+func (this *Bitcask) removeHandle(r *bytes.Reader, recordHead *RecordHead, key, value []byte, checksum *uint64, kv map[string]string) (err error) {
+	uncompacted += uint64(InfoHeadSize) + recordHead.KeySize + CRCSize
+
+	delete(this.Index, string(key))
+	delete(kv, string(key))
+
+	if err := binary.Read(r, binary.LittleEndian, value); err != nil {
+		log.Fatalln("read key failed.", err)
+	}
+	if err := binary.Read(r, binary.LittleEndian, &checksum); err != nil {
+		log.Fatalln("read key failed.", err)
+	}
+
+	return err
+}
+
 func (this *Bitcask) Compact() {
+
 	this.CompactMutex.Lock()
 	defer this.CompactMutex.Unlock()
 
@@ -153,14 +180,15 @@ func (this *Bitcask) Compact() {
 		for key, index := range indexNow {
 
 			buf := make([]byte, index.ValueLength)
-			err := logs[index.LogName].Read(&index, &buf)
+			err := logs[index.LogName].Read(&index, buf)
+
 			if err != nil {
 				return
 			}
 
 			temp_logger := newLogger()
 
-			if err := temp_logger.Open("1000.log"); err != nil {
+			if err := temp_logger.Open("10000.log"); err != nil {
 				log.Fatalln("new log file open failed.")
 			}
 
@@ -239,19 +267,53 @@ func switchLogger(temp_logger *Logger, new_logs map[string]*Logger) {
 
 func (this *Bitcask) LoggerRead(key *string, rawbuffer []byte) {
 
-	index := this.Index[*key]
-	theLogger := this.Loggers[index.LogName]
-	rawbuffer = make([]byte, this.Index[*key].ValueLength)
-
-	theLogger.Read(&index, &rawbuffer)
+	if value, exsit := this.Index[*key]; exsit {
+		index := value
+		theLogger := this.Loggers[index.LogName]
+		theLogger.Read(&index, rawbuffer)
+	} else {
+		fmt.Println(key, " not Exsit!")
+	}
 }
 
-func (this *Bitcask) LoggerWrite(key *string, record *Record) {
+func (this *Bitcask) LoggerWrite(key *string, record *Record) (err error) {
 
 	if offset, err := this.WorkLogger.Write(record); err == nil {
 		this.UpdataIndex(key, offset, uint64(record.ValueSize))
 		this.switchLogger()
+		return nil
 	}
+	return err
+}
+
+func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry) {
+
+	uncompacted = 0
+
+	// testpath, err := os.MkdirTemp("", "data")
+	// if errs := os.Mkdir("./data", fs.FileMode(os.O_CREATE)); errs != nil {
+	// 	log.Fatal(errs)
+	// }
+	// testpath := "./data"
+
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	files, err := os.ReadDir("./data")
+
+	testpath := "./data/0.log"
+
+	if err != nil {
+		log.Fatalln(err)
+		// return files
+	}
+
+	if len(files) == 0 {
+		this.WorkLogger.Open(testpath)
+		this.Loggers[testpath] = this.WorkLogger
+	}
+	return files
 }
 
 func GetNewTimeStamp() uint64 {
