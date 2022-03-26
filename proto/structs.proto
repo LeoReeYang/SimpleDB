@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package structs
+
+option go_package = "github.com/LeoReeYang/SimpleDB/proto"
+
+message GetRequest {
+    string key = 1;
+}
+
+message GetResponse {
+    string value = 1;
+}
+

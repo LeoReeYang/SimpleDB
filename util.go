@@ -42,18 +42,19 @@ func (this *Bitcask) CheckUncompacted(key *string) {
 func (this *Bitcask) switchLogger() {
 	if this.WorkLogger.FileSize > LoggerSizeThreshold {
 
-		newLogId := GetLogId(this.WorkLogger.LogName) + 1
-		newLogFileName := prefix + strconv.Itoa(int(newLogId)) + suffix
+		newLogFileName := GetNewLogName(this.WorkLogger.LogName)
 
 		nLogger := newLogger(newLogFileName)
-		// this.WorkLogger = &Logger{
 
-		// }
-
-		// this.WorkLogger.Open(newLogFileName)
 		this.Loggers[nLogger.LogName] = nLogger
 		this.WorkLogger = nLogger
 	}
+}
+
+func GetNewLogName(oldname string) (newname string) {
+	newLogId := GetLogId(oldname) + 1
+	newLogFileName := prefix + strconv.Itoa(int(newLogId)) + suffix
+	return newLogFileName
 }
 
 func Atoi(b []byte) {

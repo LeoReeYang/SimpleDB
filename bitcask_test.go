@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestSet(t *testing.T) {
@@ -94,16 +95,13 @@ func TestRecovery(t *testing.T) {
 
 	bitcask := newBitcask()
 
-	buf := make([]byte, len(value1))
-
 	wg := sync.WaitGroup{}
 
-	var value = ""
-
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(2)
 
 		go func() {
+			var value = ""
 			for i := 0; i < 5; i++ {
 				key := strconv.Itoa(i)
 
@@ -120,8 +118,7 @@ func TestRecovery(t *testing.T) {
 		}()
 
 		go func() {
-			// time.Sleep(time.Second)
-
+			buf := make([]byte, len(value1))
 			for j := 0; j < 5; j++ {
 				key := strconv.Itoa(j)
 				bitcask.Get(&key, buf)
@@ -133,11 +130,49 @@ func TestRecovery(t *testing.T) {
 	}
 	wg.Wait()
 
-	for j := 0; j < 5; j++ {
-		key := strconv.Itoa(j)
-		bitcask.Get(&key, buf)
+	// for j := 0; j < 5; j++ {
+	// 	key := strconv.Itoa(j)
+	// 	bitcask.Get(&key, buf)
 
-		fmt.Println(key, string(buf))
+	// 	fmt.Println(key, string(buf))
+	// }
+
+}
+
+// os.Mkdir("./data", 0755)
+// defer os.RemoveAll("./data")
+
+func BenchmarkTest(b *testing.B) {
+
+	bitcask := newBitcask()
+
+	// bitcask.LoggerWrite()
+
+	// key := "1"
+	// value1 := "cy is god!!"
+	// value2 := "cy is god.."
+
+	for n := 0; n < b.N; n++ {
+		bitcask.WriteTest()
+
 	}
+}
+
+func TestQps(t *testing.T) {
+
+	bitcask := newBitcask()
+
+	// bitcask.LoggerWrite()
+
+	// key := "1"
+	// value1 := "cy is god!!"
+	// value2 := "cy is god.."
+	begin := time.Now()
+	bitcask.WriteTest()
+	end := time.Now()
+
+	duration := end.Sub(begin)
+
+	fmt.Printf("TPS:%v", float64(10000)/duration.Seconds())
 
 }

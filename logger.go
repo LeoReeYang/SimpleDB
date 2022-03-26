@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	CompactThreshold    uint64 = 1 << 16
-	LoggerSizeThreshold uint64 = 1 << 7
+	CompactThreshold    uint64 = 1 << 26
+	LoggerSizeThreshold uint64 = 1 << 12
 	CRCSize             uint64 = 8
 	suffix              string = ".log"
 	prefix              string = "./data/"

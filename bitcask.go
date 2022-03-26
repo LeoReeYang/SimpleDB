@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 func (this *Bitcask) Set(key, value *string) (err error) {
@@ -152,7 +153,7 @@ func (this *Bitcask) Compact(fn string) {
 
 	go func(logs map[string]*Logger, indexNow map[string]ValueIndex) {
 
-		//traverse the logs and index
+		//traverse and copy the logs and index
 		this.RWmutex.RLock()
 		for fn, v := range logs {
 			new_logs[fn] = v
@@ -252,7 +253,20 @@ func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry) {
 }
 
 func GetNewTimeStamp() uint64 {
-	temp := TimeStampCount
-	TimeStampCount++
-	return temp
+	return atomic.AddUint64(&TimeStampCount, 1)
+}
+
+func (this *Bitcask) WriteTest() {
+
+	key := "1"
+
+	value := "0"
+	for i := 0; i < 4040; i++ {
+		value = value + "0"
+	}
+
+	for i := 0; i < 10000; i++ {
+		this.Set(&key, &value)
+	}
+
 }
