@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 )
 
-func (this *Bitcask) Set(key, value *string) (err error) {
+func (this *Bitcask) Set(key, value string) (err error) {
 
-	record := newRecord(GetNewTimeStamp(), uint64(len(*key)), uint64(len(*value)), NewValue, *key, *value)
+	record := newRecord(GetNewTimeStamp(), uint64(len(key)), uint64(len(value)), NewValue, key, value)
 
 	this.RWmutex.Lock()
 	this.CheckUncompacted(key)
@@ -24,16 +24,22 @@ func (this *Bitcask) Set(key, value *string) (err error) {
 	return err
 }
 
-func (this *Bitcask) Get(key *string, rawbuffer []byte) {
+func (this *Bitcask) Get(key string) (val string, err error) {
 
 	this.RWmutex.RLock()
-	this.LoggerRead(key, rawbuffer)
+
+	vals, err := this.LoggerRead(key)
+	if err != nil {
+		log.Fatal(err)
+		return "", err
+	}
 	this.RWmutex.RUnlock()
+	return vals, nil
 }
 
-func (this *Bitcask) Remove(key *string) {
+func (this *Bitcask) Remove(key string) {
 
-	record := newRecord(GetNewTimeStamp(), uint64(len(*key)), 0, RemoveValue, *key, "")
+	record := newRecord(GetNewTimeStamp(), uint64(len(key)), 0, RemoveValue, key, "")
 
 	this.RWmutex.Lock()
 	this.CheckUncompacted(key)
@@ -69,7 +75,14 @@ func (this *Bitcask) Recovery() {
 	if len(files) != 0 {
 		newLogId := GetLogId(this.WorkLogger.LogName) + 1
 		newLogFileName := prefix + strconv.Itoa(int(newLogId)) + suffix
-		this.WorkLogger.Open(newLogFileName)
+
+		nLogger := newLogger(newLogFileName)
+
+		this.Loggers[nLogger.LogName] = nLogger
+		this.WorkLogger = nLogger
+
+		// this.WorkLogger.Open(newLogFileName)
+		// this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 }
 
@@ -116,7 +129,7 @@ func (this *Bitcask) newValueHandle(r *bytes.Reader, pos *int, recordHead *Recor
 
 	key_str := string(key)
 
-	this.UpdataIndex(&key_str, uint64(offset), recordHead.ValueSize)
+	this.UpdataIndex(key_str, uint64(offset), recordHead.ValueSize)
 
 	kv[string(key)] = string(value)
 
@@ -204,18 +217,25 @@ func (this *Bitcask) Compact(fn string) {
 	wg.Wait()
 }
 
-func (this *Bitcask) LoggerRead(key *string, rawbuffer []byte) {
+func (this *Bitcask) LoggerRead(key string) (val string, err error) {
+	var errs error
+	if value, exsit := this.Index[key]; exsit {
+		rawbuffer := make([]byte, value.ValueLength)
 
-	if value, exsit := this.Index[*key]; exsit {
-		index := value
-		theLogger := this.Loggers[index.LogName]
-		theLogger.Read(&index, rawbuffer)
-	} else {
-		fmt.Println(key, " not Exsit!")
+		theLogger := this.Loggers[value.LogName]
+		err := theLogger.Read(&value, rawbuffer)
+
+		if err != nil {
+			fmt.Println(key, " not Exsit!")
+			errs = err
+			return "", err
+		}
+		return string(rawbuffer), nil
 	}
+	return "", errs
 }
 
-func (this *Bitcask) LoggerWrite(logger *Logger, key *string, record *Record) (err error) {
+func (this *Bitcask) LoggerWrite(logger *Logger, key string, record *Record) (err error) {
 
 	if offset, err := this.WorkLogger.Write(record); err == nil {
 		this.UpdataIndex(key, offset, uint64(record.ValueSize))
@@ -235,13 +255,11 @@ func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry) {
 
 	uncompacted = 0
 
-	files, err := os.ReadDir("./data")
+	files, err := os.ReadDir(prefix) //"./server/data"
 	if err != nil {
 		log.Fatalln(err)
 		return
 	}
-
-	// testpath := "./data/0.log"
 
 	path := "0.log"
 
@@ -266,7 +284,7 @@ func (this *Bitcask) WriteTest() {
 	}
 
 	for i := 0; i < 10000; i++ {
-		this.Set(&key, &value)
+		this.Set(key, value)
 	}
 
 }

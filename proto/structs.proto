@@ -1,10 +1,15 @@
 syntax = "proto3";
 
-package structs
+package structs;
 
-option go_package = "github.com/LeoReeYang/SimpleDB/proto"
+option go_package = "github.com/LeoReeYang/SimpleDB/proto";
 
-message GetRequest {
+
+service KV{
+    rpc GetValue(KeyRequest) returns (GetResponse){}
+}
+
+message KeyRequest {
     string key = 1;
 }
 

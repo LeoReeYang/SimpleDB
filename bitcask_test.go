@@ -2,6 +2,7 @@ package SimpleDB
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -12,19 +13,23 @@ import (
 func TestSet(t *testing.T) {
 	key, value := "1", "cy is god!"
 
-	bitcask := newBitcask()
+	bitcask := NewBitcask()
 
-	err := bitcask.Set(&key, &value)
-
-	buf := make([]byte, len(value))
-
-	bitcask.Get(&key, buf)
-
-	fmt.Println(string(buf))
-
-	if err != nil || string(buf) != value {
-		t.Fatal("false.")
+	err := bitcask.Set(key, value)
+	if err != nil {
+		t.Fatal("false", err)
 	}
+
+	val, err := bitcask.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Println(val)
+
+	// if err != nil || string(buf) != value {
+	// 	t.Fatal("false.")
+	// }
 
 	// if err != nil {
 	// 	t.Fatalf(`Set(%v ,%v) = %v `, key, value, err)
@@ -36,7 +41,7 @@ func TestBuildBuffer(t *testing.T) {
 	key, value := "1", "cy is god!"
 	record := newRecord(GetNewTimeStamp(), 1, uint64(len(value)), NewValue, key, value)
 
-	// bitcask := newBitcask()
+	// bitcask := NewBitcask()
 
 	buf := make([]byte, 0)
 
@@ -47,10 +52,10 @@ func TestBuildBuffer(t *testing.T) {
 
 func TestLoggerWrite(t *testing.T) {
 	key, value := "1", "cy is god!"
-	bitcask := newBitcask()
+	bitcask := NewBitcask()
 	record := newRecord(GetNewTimeStamp(), 1, uint64(len(value)), NewValue, key, value)
 
-	err := bitcask.LoggerWrite(bitcask.WorkLogger, &key, record)
+	err := bitcask.LoggerWrite(bitcask.WorkLogger, key, record)
 
 	fmt.Println("\n", bitcask.WorkLogger.LogName)
 	fmt.Println(record)
@@ -58,23 +63,6 @@ func TestLoggerWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf(`LoggerWrite(%v ,%v),err: %v`, &key, record, err)
 		t.Fatal("failed.")
-	}
-}
-
-func TestGet(t *testing.T) {
-	key, value := "1", "cy is god!"
-	bitcask := newBitcask()
-
-	err := bitcask.Set(&key, &value)
-
-	buf := make([]byte, 0)
-
-	bitcask.Get(&key, buf)
-
-	fmt.Println(string(buf))
-
-	if err != nil || string(buf) != value {
-		t.Fatal("false.")
 	}
 }
 
@@ -93,7 +81,7 @@ func TestRecovery(t *testing.T) {
 	value1 := "cy is god!!"
 	value2 := "cy is god.."
 
-	bitcask := newBitcask()
+	bitcask := NewBitcask()
 
 	wg := sync.WaitGroup{}
 
@@ -111,17 +99,21 @@ func TestRecovery(t *testing.T) {
 					value = value2
 				}
 
-				bitcask.Set(&key, &value)
+				bitcask.Set(key, value)
 				fmt.Printf("key: %v write into value: %v  .\n", key, value)
 			}
 			wg.Done()
 		}()
 
 		go func() {
-			buf := make([]byte, len(value1))
+			// buf := make([]byte, len(value1))
 			for j := 0; j < 5; j++ {
 				key := strconv.Itoa(j)
-				bitcask.Get(&key, buf)
+				buf, err := bitcask.Get(key)
+
+				if err != nil {
+					log.Fatal(err)
+				}
 
 				fmt.Println(key, string(buf))
 			}
@@ -144,7 +136,7 @@ func TestRecovery(t *testing.T) {
 
 func BenchmarkTest(b *testing.B) {
 
-	bitcask := newBitcask()
+	bitcask := NewBitcask()
 
 	// bitcask.LoggerWrite()
 
@@ -160,7 +152,7 @@ func BenchmarkTest(b *testing.B) {
 
 func TestQps(t *testing.T) {
 
-	bitcask := newBitcask()
+	bitcask := NewBitcask()
 
 	// bitcask.LoggerWrite()
 

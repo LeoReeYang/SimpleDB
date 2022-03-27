@@ -21,17 +21,17 @@ func GetLogId(fname string) uint64 {
 	return math.MaxUint64
 }
 
-func (this *Bitcask) GetRecordSize(key *string) uint64 {
-	return uint64(HeaderSize) + uint64(len(*key)) + this.Index[*key].ValueLength
+func (this *Bitcask) GetRecordSize(key string) uint64 {
+	return uint64(HeaderSize) + uint64(len(key)) + this.Index[key].ValueLength
 }
 
-func (this *Bitcask) UpdataIndex(key *string, valueOffset uint64, valueSize uint64) {
+func (this *Bitcask) UpdataIndex(key string, valueOffset uint64, valueSize uint64) {
 	tempIndex := newIndex(this.WorkLogger.LogName, valueOffset, valueSize)
-	this.Index[*key] = *tempIndex
+	this.Index[key] = *tempIndex
 }
 
-func (this *Bitcask) CheckUncompacted(key *string) {
-	if _, ok := this.Index[*key]; ok {
+func (this *Bitcask) CheckUncompacted(key string) {
+	if _, ok := this.Index[key]; ok {
 		if uncompacted += this.GetRecordSize(key); uncompacted >= CompactThreshold {
 			uncompacted = 0
 			this.Compact(this.WorkLogger.LogName)

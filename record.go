@@ -28,7 +28,7 @@ type Bitcask struct {
 	RWmutex      sync.RWMutex
 }
 
-func newBitcask() *Bitcask {
+func NewBitcask() *Bitcask {
 	bitcask := &Bitcask{
 		Index:   make(map[string]ValueIndex, 0),
 		Loggers: make(map[string]*Logger, 0),

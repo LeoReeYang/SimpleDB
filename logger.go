@@ -71,7 +71,8 @@ func (logger *Logger) Read(target *ValueIndex, rawbuffer []byte) (err error) {
 		log.Fatalln("offset seek failed.")
 		return err
 	} else if readnums, err := logger.Fd.ReadAt(rawbuffer, int64(target.Offset)); readnums != int(target.ValueLength) {
-		log.Fatalln("Logger.Read() read into buffers failed", err)
+
+		log.Fatalln("Logger.Read() read into buffers failed.", target, logger, err)
 	}
 
 	return nil
