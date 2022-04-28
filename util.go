@@ -28,13 +28,18 @@ func (this *Bitcask) GetRecordSize(key string) uint64 {
 func (this *Bitcask) UpdataIndex(key string, valueOffset uint64, valueSize uint64) {
 	tempIndex := newIndex(this.WorkLogger.LogName, valueOffset, valueSize)
 	this.Index[key] = *tempIndex
+	if this.isCompact == false {
+		this.backupIndex[key] = *tempIndex
+	}
 }
 
 func (this *Bitcask) CheckUncompacted(key string) {
 	if _, ok := this.Index[key]; ok {
-		if uncompacted += this.GetRecordSize(key); uncompacted >= CompactThreshold {
+		// fmt.Printf("CompactThreshold %v,	uncompacted:%v\n", CompactThreshold, uncompacted)
+		if uncompacted += this.GetRecordSize(key); uncompacted >= CompactThreshold && !this.isCompact {
 			uncompacted = 0
-			this.Compact(this.WorkLogger.LogName)
+			this.isCompact = true
+			go this.TCompact(this.WorkLogger.LogName, this.Loggers, this.Index)
 		}
 	}
 }
@@ -42,7 +47,10 @@ func (this *Bitcask) CheckUncompacted(key string) {
 func (this *Bitcask) switchLogger() {
 	if this.WorkLogger.FileSize > LoggerSizeThreshold {
 
-		newLogFileName := GetNewLogName(this.WorkLogger.LogName)
+		// newLogFileName := GetNewLogName(this.WorkLogger.LogName)
+
+		this.maxfileid++
+		newLogFileName := prefix + strconv.Itoa(int(this.maxfileid)) + suffix
 
 		nLogger := newLogger(newLogFileName)
 
@@ -117,8 +125,10 @@ func switchLogger(temp_logger *Logger, new_logs map[string]*Logger) {
 	if temp_logger.FileSize > LoggerSizeThreshold {
 		new_logs[temp_logger.LogName] = temp_logger
 
-		newLogId := GetLogId(temp_logger.LogName) + 1
-		newLogFileName := strconv.Itoa(int(newLogId)) + suffix //get "id.log"
+		// newLogId := GetLogId(temp_logger.LogName) + 1
+		// newLogFileName := strconv.Itoa(int(newLogId)) + suffix //get "id.log"
+
+		newLogFileName := GetNewLogName(temp_logger.LogName)
 
 		temp_logger.Open(newLogFileName)
 	}

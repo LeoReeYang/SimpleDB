@@ -13,10 +13,11 @@ import (
 )
 
 func (this *Bitcask) Set(key, value string) (err error) {
-
+	//build a new Record from key,value
 	record := newRecord(GetNewTimeStamp(), uint64(len(key)), uint64(len(value)), NewValue, key, value)
 
 	this.RWmutex.Lock()
+	// check wether we should do Compaction or not
 	this.CheckUncompacted(key)
 	err = this.LoggerWrite(this.WorkLogger, key, record)
 	this.RWmutex.Unlock()
@@ -52,13 +53,19 @@ func (this *Bitcask) Recovery() {
 
 	var checksum uint64
 	kv := make(map[string]string)
+	this.maxfileid = 0
 	recordHead := newRecordHead()
 
 	files := this.RecoveryInit()
 
 	for _, file := range files {
 
+		// fmt.Println("filename: ", file.Name())
+		// traverse all the files in data dir,get the content,filesize,startpos
 		content, contentSize, pos := this.fileInit(file)
+		if tid := GetLogId(file.Name()); tid > this.maxfileid {
+			this.maxfileid = tid
+		}
 
 		r := bytes.NewReader(content)
 
@@ -67,10 +74,10 @@ func (this *Bitcask) Recovery() {
 		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 
-	if uncompacted >= CompactThreshold {
-		fn := this.WorkLogger.LogName
-		this.Compact(fn)
-	}
+	// if uncompacted >= CompactThreshold {
+	// 	fn := this.WorkLogger.LogName
+	// 	this.Compact(fn)
+	// }
 
 	if len(files) != 0 {
 		newLogId := GetLogId(this.WorkLogger.LogName) + 1
@@ -152,6 +159,75 @@ func (this *Bitcask) removeHandle(r *bytes.Reader, recordHead *RecordHead, key, 
 	return err
 }
 
+func (this *Bitcask) TCompact(fn string, logs map[string]*Logger, indexs map[string]ValueIndex) {
+
+	this.RWmutex.Lock()
+	// temp_logger := newLogger(GetNewLogName(this.WorkLogger.LogName))
+	this.maxfileid++
+	temp_logger := newLogger(prefix + strconv.Itoa(int(this.maxfileid)) + suffix)
+
+	this.RWmutex.Unlock()
+
+	for key, index := range indexs {
+
+		buf := make([]byte, index.ValueLength)
+
+		this.RWmutex.RLock()
+		if err := logs[index.LogName].Read(&index, buf); err != nil {
+			return
+		}
+		this.RWmutex.RUnlock()
+
+		record := newRecord(GetNewTimeStamp(), uint64(len(key)), index.ValueLength, NewValue, key, string(buf))
+
+		if offset, err := temp_logger.Write(record); err == nil {
+			temp_index := newIndex(temp_logger.LogName, offset, record.ValueSize)
+
+			this.RWmutex.Lock()
+			this.Index[key] = *temp_index
+			this.Loggers[temp_logger.LogName] = temp_logger //release the old one?
+			// switchLogger(temp_logger, this.Loggers)
+
+			if temp_logger.FileSize > LoggerSizeThreshold {
+				logs[temp_logger.LogName] = temp_logger
+
+				// newLogId := GetLogId(temp_logger.LogName) + 1
+				// newLogFileName := strconv.Itoa(int(newLogId)) + suffix //get "id.log"
+				// newLogFileName := GetNewLogName(temp_logger.LogName)
+
+				this.maxfileid++
+				newLogFileName := prefix + strconv.Itoa(int(this.maxfileid)) + suffix
+
+				temp_logger.Open(newLogFileName)
+			}
+
+			this.RWmutex.Unlock()
+
+		} else {
+			log.Fatalln("new log file write failed.")
+		}
+	}
+
+	// func(fn string, logs map[string]*Logger) {
+
+	for fname := range logs {
+		// remove the old logs
+		if GetLogId(fname) < GetLogId(fn) {
+			fmt.Println("file to delete: ", fname)
+
+			this.RWmutex.Lock()
+			if err := os.Remove(fname); err == nil {
+				delete(logs, fname)
+			}
+			this.RWmutex.Unlock()
+
+			fmt.Println("	deleted: ", fname)
+		}
+	}
+	// }(fn, this.Loggers)
+	this.isCompact = false
+}
+
 func (this *Bitcask) Compact(fn string) {
 
 	this.CompactMutex.Lock()
@@ -223,6 +299,8 @@ func (this *Bitcask) LoggerRead(key string) (val string, err error) {
 		rawbuffer := make([]byte, value.ValueLength)
 
 		theLogger := this.Loggers[value.LogName]
+
+		// this.RWmutex.RLock()
 		err := theLogger.Read(&value, rawbuffer)
 
 		if err != nil {
@@ -230,6 +308,9 @@ func (this *Bitcask) LoggerRead(key string) (val string, err error) {
 			errs = err
 			return "", err
 		}
+
+		// this.RWmutex.RUnlock()
+
 		return string(rawbuffer), nil
 	}
 	return "", errs
@@ -237,7 +318,10 @@ func (this *Bitcask) LoggerRead(key string) (val string, err error) {
 
 func (this *Bitcask) LoggerWrite(logger *Logger, key string, record *Record) (err error) {
 
+	// this.RWmutex.Lock()
+	// defer this.RWmutex.Unlock()
 	if offset, err := this.WorkLogger.Write(record); err == nil {
+		fmt.Printf("write into file: %v,	file size :%v\n", this.WorkLogger.LogName, this.WorkLogger.FileSize)
 		this.UpdataIndex(key, offset, uint64(record.ValueSize))
 		this.switchLogger()
 		return nil
@@ -261,10 +345,9 @@ func (this *Bitcask) RecoveryInit() (getfiles []fs.DirEntry) {
 		return
 	}
 
-	path := "0.log"
-
 	if len(files) == 0 {
-		this.WorkLogger.Open(prefix + path)
+		this.WorkLogger.Open(prefix + "0.log")
+		this.maxfileid = 0
 		this.Loggers[this.WorkLogger.LogName] = this.WorkLogger
 	}
 	return files
@@ -279,11 +362,11 @@ func (this *Bitcask) WriteTest() {
 	key := "1"
 
 	value := "0"
-	for i := 0; i < 4040; i++ {
+	for i := 0; i < 4030; i++ {
 		value = value + "0"
 	}
 
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 5000; i++ {
 		this.Set(key, value)
 	}
 

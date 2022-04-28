@@ -21,17 +21,25 @@ const (
 )
 
 type Bitcask struct {
-	Index        map[string]ValueIndex //key -> info
-	Loggers      map[string]*Logger    //filename -> logger
-	WorkLogger   *Logger
-	CompactMutex sync.Mutex
-	RWmutex      sync.RWMutex
+	Index   map[string]ValueIndex //key -> info
+	Loggers map[string]*Logger    //filename -> logger
+
+	backupIndex   map[string]ValueIndex
+	backupLoggers map[string]*Logger
+	WorkLogger    *Logger
+	CompactMutex  sync.Mutex
+	RWmutex       sync.RWMutex
+	isCompact     bool
+	maxfileid     uint64
 }
 
 func NewBitcask() *Bitcask {
 	bitcask := &Bitcask{
 		Index:   make(map[string]ValueIndex, 0),
 		Loggers: make(map[string]*Logger, 0),
+
+		backupIndex: make(map[string]ValueIndex, 0),
+		// backupLoggers: make(map[string]*Logger, 0),
 		WorkLogger: &Logger{
 			LogName:  "",
 			Fd:       nil,
@@ -60,6 +68,7 @@ func newRecordHead() RecordHead {
 	return RecordHead{}
 }
 
+//return the rawbytes data from a Record
 func (r *Record) BuildBuffer() []byte {
 
 	totalSize := HeaderSize + len(r.Key) + len(r.Value)

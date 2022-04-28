@@ -10,6 +10,7 @@ import (
 	"github.com/LeoReeYang/SimpleDB"
 	pb "github.com/LeoReeYang/SimpleDB/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 var (
@@ -51,11 +52,13 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	s := grpc.NewServer()
-	pb.RegisterKVServer(s, NewServer())
+	server := grpc.NewServer()
+	pb.RegisterKVServer(server, NewServer())
+
+	reflection.Register(server)
 
 	log.Printf("server listening at %v", lis.Addr())
-	if err := s.Serve(lis); err != nil {
+	if err := server.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }

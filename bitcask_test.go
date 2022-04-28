@@ -3,6 +3,7 @@ package SimpleDB
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"sync"
@@ -11,21 +12,37 @@ import (
 )
 
 func TestSet(t *testing.T) {
-	key, value := "1", "cy is god!"
+	// key, value := "1", "cy is god!"
+	os.Mkdir("./data", 0755)
+	defer os.RemoveAll("./data")
+	value := "cy is god!"
 
 	bitcask := NewBitcask()
 
-	err := bitcask.Set(key, value)
-	if err != nil {
-		t.Fatal("false", err)
+	for i := 0; i < 10000; i++ {
+		err := bitcask.Set(strconv.Itoa(i), value)
+		if err != nil {
+			t.Fatal("false", err)
+		}
 	}
 
-	val, err := bitcask.Get(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// bitcask.Set(key, value)
 
-	fmt.Println(val)
+	bitcask.Remove("1")
+
+	// val, err := bitcask.Get("1")
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// fmt.Println("kv:", key, val)
+
+	for i := 0; i < 10000; i++ {
+		val, err := bitcask.Get(strconv.Itoa(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println("kv:", strconv.Itoa(i), val)
+	}
 
 	// if err != nil || string(buf) != value {
 	// 	t.Fatal("false.")
@@ -85,56 +102,94 @@ func TestRecovery(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	for i := 0; i < 100; i++ {
-		wg.Add(2)
+	rand.Seed(time.Now().UnixMicro())
+	wg.Add(1)
 
-		go func() {
+	go func() {
+		for i := 0; i < 50; i++ {
 			var value = ""
-			for i := 0; i < 5; i++ {
-				key := strconv.Itoa(i)
+			key := strconv.Itoa(i)
 
-				if (i % 2) == 1 {
-					value = value1
-				} else {
-					value = value2
-				}
-
-				bitcask.Set(key, value)
-				fmt.Printf("key: %v write into value: %v  .\n", key, value)
+			if (i % 2) == 1 {
+				value = value1
+			} else {
+				value = value2
 			}
-			wg.Done()
-		}()
+			bitcask.Set(key, value)
+			fmt.Printf("key: %v write into value: %v  .\n\n", key, value)
+		}
+		wg.Done()
+	}()
 
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
 		go func() {
-			// buf := make([]byte, len(value1))
-			for j := 0; j < 5; j++ {
-				key := strconv.Itoa(j)
-				buf, err := bitcask.Get(key)
+			time.Sleep(time.Duration(rand.Intn(500) * int(time.Millisecond)))
+			for j := 0; j < 25; j++ {
+				key := rand.Intn(50)
+				buf, err := bitcask.Get(strconv.Itoa(key))
 
 				if err != nil {
 					log.Fatal(err)
 				}
 
-				fmt.Println(key, string(buf))
+				fmt.Printf("key value get: %v,%v\n", key, string(buf))
 			}
-			wg.Done()
 		}()
+		wg.Done()
 	}
-	wg.Wait()
 
-	// for j := 0; j < 5; j++ {
-	// 	key := strconv.Itoa(j)
-	// 	bitcask.Get(&key, buf)
+	// for i := 0; i < 3; i++ {
+	// 	wg.Add(2)
 
-	// 	fmt.Println(key, string(buf))
+	// 	go func() {
+	// 		var value = ""
+	// 		for i := 0; i < 5; i++ {
+	// 			key := strconv.Itoa(i)
+
+	// 			if (i % 2) == 1 {
+	// 				value = value1
+	// 			} else {
+	// 				value = value2
+	// 			}
+
+	// 			bitcask.Set(key, value)
+	// 			fmt.Printf("key: %v write into value: %v  .\n\n", key, value)
+	// 		}
+	// 		wg.Done()
+	// 	}()
+
+	// 	go func() {
+	// 		// buf := make([]byte, len(value1))
+	// 		time.Sleep(100 * time.Millisecond)
+	// 		for j := 0; j < 5; j++ {
+
+	// 			key := strconv.Itoa(j)
+	// 			n := rand.Intn(100)
+
+	// 			time.Sleep(time.Duration(n+200) * time.Microsecond)
+
+	// 			buf, err := bitcask.Get(key)
+
+	// 			if err != nil {
+	// 				log.Fatal(err)
+	// 			}
+
+	// 			fmt.Printf("key value get: %v,%v\n", key, string(buf))
+	// 		}
+	// 		wg.Done()
+	// 	}()
 	// }
-
+	wg.Wait()
 }
 
 // os.Mkdir("./data", 0755)
 // defer os.RemoveAll("./data")
 
 func BenchmarkTest(b *testing.B) {
+
+	os.Mkdir("./data", 0755)
+	defer os.RemoveAll("./data")
 
 	bitcask := NewBitcask()
 
@@ -146,25 +201,22 @@ func BenchmarkTest(b *testing.B) {
 
 	for n := 0; n < b.N; n++ {
 		bitcask.WriteTest()
-
 	}
 }
 
 func TestQps(t *testing.T) {
 
+	os.Mkdir("./data", 0755)
+	defer os.RemoveAll("./data")
+
 	bitcask := NewBitcask()
 
-	// bitcask.LoggerWrite()
-
-	// key := "1"
-	// value1 := "cy is god!!"
-	// value2 := "cy is god.."
 	begin := time.Now()
 	bitcask.WriteTest()
 	end := time.Now()
 
 	duration := end.Sub(begin)
 
-	fmt.Printf("TPS:%v", float64(10000)/duration.Seconds())
+	fmt.Printf("TPS:%v", float64(5000)/duration.Seconds())
 
 }

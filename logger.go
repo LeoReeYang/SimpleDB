@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	CompactThreshold    uint64 = 1 << 26
-	LoggerSizeThreshold uint64 = 1 << 12
+	CompactThreshold    uint64 = 1 << 8
+	LoggerSizeThreshold uint64 = 1 << 6
 	CRCSize             uint64 = 8
 	suffix              string = ".log"
 	prefix              string = "./data/"
@@ -45,6 +45,7 @@ func (logger *Logger) Open(logname string) (err error) {
 	}
 }
 
+//Logger write a Record to the file handled by it,return the value offset
 func (logger *Logger) Write(record *Record) (offset uint64, err error) {
 
 	posNow, err := logger.Fd.Seek(0, 1)
