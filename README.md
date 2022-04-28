@@ -1,2 +1,2 @@
 # SimpleDB
-Bitcaks for go version
+Bitcask for go version
